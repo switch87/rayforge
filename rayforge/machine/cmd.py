@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Coroutine
+import math
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from functools import partial
 from gettext import gettext as _
 from typing import TYPE_CHECKING
 
 import numpy as np
 from blinker import Signal
+from raygeo.geo import Geometry
+from raygeo.geo.shape.polygon import (
+    get_polygon_convex_hull,
+    get_polygon_signed_area,
+)
 from raygeo.ops import Ops
 from raygeo.ops.axis import Axis
 from raygeo.ops.types import CommandType
@@ -209,13 +216,15 @@ class MachineCmd:
         artifact: JobArtifact,
         machine: Machine,
         on_progress: Callable[[dict], None] | None,
+        outline: bool = False,
     ):
         """The specific machine action for a framing job.
 
         Builds the frame outline in command space — through the same
         transforms a job gets — and hands the corners to the driver,
         which frames in whatever way fits the controller (see
-        Driver.frame()).
+        Driver.frame()). The outline is the job's bounding rectangle,
+        or with *outline* the convex hull of its cutting moves.
         """
         if not isinstance(artifact, JobArtifact):
             raise TypeError("_run_frame_action received a non-JobArtifact")
@@ -233,7 +242,11 @@ class MachineCmd:
 
         # A moves-only trace carrying the outline through the same
         # transforms a job gets.
-        frame_ops = _build_frame_trace(artifact.ops.rect(), repeat_count)
+        if outline:
+            frame_outline = _frame_hull_corners(artifact.ops)
+        else:
+            frame_outline = _frame_rect_corners(artifact.ops.rect())
+        frame_ops = _build_frame_trace(frame_outline, repeat_count)
 
         # Apply the active layer's rotary mapping so the frame drives
         # the rotary axis instead of the physical Y axis (issue #356).
@@ -280,9 +293,7 @@ class MachineCmd:
                 target_axis=rotary_module.axis,
             )
 
-        corners = _frame_trace_corners(
-            frame_ops, len(_frame_rect_corners(artifact.ops.rect()))
-        )
+        corners = _frame_trace_corners(frame_ops, len(frame_outline))
 
         async def execute(
             on_command_done: Callable[[int], None | Awaitable[None]] | None,
@@ -394,15 +405,19 @@ class MachineCmd:
         self,
         machine: Machine,
         on_progress: Callable[[dict], None] | None = None,
+        outline: bool = False,
     ):
         """
-        Asynchronously generates ops and runs a framing job.
-        This is an awaitable coroutine.
+        Asynchronously generates ops and runs a framing job: the job's
+        bounding rectangle, or with *outline* the convex hull of its
+        cutting moves. This is an awaitable coroutine.
         """
         try:
             await self._start_job(
                 machine,
-                final_job_action=self._run_frame_action,
+                final_job_action=partial(
+                    self._run_frame_action, outline=outline
+                ),
                 on_progress=on_progress,
             )
         except JobAlreadyRunningError as e:
@@ -687,8 +702,95 @@ def _frame_rect_corners(
     ]
 
 
+FRAME_OUTLINE_TOLERANCE_MM = 0.25
+
+
+def _frame_hull_corners(ops: Ops) -> list[tuple[float, float]]:
+    """The frame outline around the convex hull of the cutting moves.
+
+    Curves are linearised first and travel moves are left out, so the
+    outline is what the material must cover. The list is closed like
+    the rectangle outline. Curved stretches of the hull are simplified
+    to within FRAME_OUTLINE_TOLERANCE_MM, so the frame stays a handful
+    of corners. A job whose cuts have no area (a single line, say)
+    falls back to its bounding rectangle.
+    """
+    linear = ops.copy()
+    linear.linearize_all()
+    points: list[tuple[float, float]] = []
+    for i in range(linear.len()):
+        if not linear.is_cutting(i):
+            continue
+        for index in (i - 1, i) if i > 0 else (i,):
+            x, y, _z = linear.endpoint(index)
+            points.append((x, y))
+    hull = get_polygon_convex_hull(points) if len(points) >= 3 else []
+    if len(hull) < 3 or abs(get_polygon_signed_area(hull)) < 1e-9:
+        return _frame_rect_corners(ops.rect())
+    loop = Geometry()
+    loop.move_to(*hull[0])
+    for x, y in hull[1:]:
+        loop.line_to(x, y)
+    loop.line_to(*hull[0])
+    loop.simplify(FRAME_OUTLINE_TOLERANCE_MM)
+    corners = [(float(c.end[0]), float(c.end[1])) for c in loop.data[:-1]]
+    if len(corners) < 3:
+        return _frame_rect_corners(ops.rect())
+    overshoot = _largest_overshoot(corners, hull)
+    if overshoot > 1e-9:
+        corners = _grow_convex(corners, overshoot)
+    return [*corners, corners[0]]
+
+
+def _largest_overshoot(
+    corners: list[tuple[float, float]],
+    points: Sequence[tuple[float, float]],
+) -> float:
+    """How far the farthest of *points* lies outside a convex polygon."""
+    sign = 1.0 if get_polygon_signed_area(corners) > 0 else -1.0
+    edges = list(zip(corners, corners[1:] + corners[:1]))
+    largest = 0.0
+    for x, y in points:
+        for (ax, ay), (bx, by) in edges:
+            length = math.hypot(bx - ax, by - ay)
+            if length < 1e-12:
+                continue
+            cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax)
+            largest = max(largest, -sign * cross / length)
+    return largest
+
+
+def _grow_convex(
+    corners: list[tuple[float, float]], distance: float
+) -> list[tuple[float, float]]:
+    """Moves every edge of a convex polygon outward by *distance*.
+
+    Simplifying the hull cuts its curved stretches with chords that lie
+    inside the design; growing the polygon by the largest overshoot
+    keeps the whole design inside the frame.
+    """
+    sign = 1.0 if get_polygon_signed_area(corners) > 0 else -1.0
+    grown = []
+    count = len(corners)
+    for i, (x, y) in enumerate(corners):
+        px, py = corners[i - 1]
+        nx, ny = corners[(i + 1) % count]
+        normals = []
+        for (ax, ay), (bx, by) in (((px, py), (x, y)), ((x, y), (nx, ny))):
+            dx, dy = bx - ax, by - ay
+            length = math.hypot(dx, dy) or 1.0
+            normals.append((sign * dy / length, -sign * dx / length))
+        bx, by = normals[0][0] + normals[1][0], normals[0][1] + normals[1][1]
+        cos_half = (bx * normals[0][0] + by * normals[0][1]) / (
+            math.hypot(bx, by) or 1.0
+        )
+        scale = distance / max(cos_half, 1e-6) / (math.hypot(bx, by) or 1.0)
+        grown.append((x + bx * scale, y + by * scale))
+    return grown
+
+
 def _build_frame_trace(
-    rect: tuple[float, float, float, float],
+    outline: list[tuple[float, float]],
     repeat_count: int,
 ) -> Ops:
     """Build the frame outline as a moves-only trace.
@@ -698,9 +800,8 @@ def _build_frame_trace(
     stream from the traced corners (see ``Driver.frame``).
     """
     trace = Ops()
-    corners = _frame_rect_corners(rect)
     for _repeat in range(max(1, repeat_count)):
-        for corner in corners:
+        for corner in outline:
             trace.move_to(*corner)
     return trace
 

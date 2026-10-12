@@ -14,6 +14,7 @@ from rayforge.machine.cmd import (
     JobAlreadyRunningError,
     MachineCmd,
     _build_frame_trace,
+    _frame_hull_corners,
     _frame_rect_corners,
     _frame_trace_corners,
 )
@@ -733,7 +734,9 @@ class TestFrameTrace:
         ]
 
     def test_trace_is_moves_only(self):
-        trace = _build_frame_trace((0.0, 0.0, 10.0, 10.0), 1)
+        trace = _build_frame_trace(
+            _frame_rect_corners((0.0, 0.0, 10.0, 10.0)), 1
+        )
 
         assert all(
             trace.command_type(i) == CommandType.MOVE_TO
@@ -741,7 +744,9 @@ class TestFrameTrace:
         )
 
     def test_trace_repeats_the_outline(self):
-        trace = _build_frame_trace((0.0, 0.0, 10.0, 10.0), 3)
+        trace = _build_frame_trace(
+            _frame_rect_corners((0.0, 0.0, 10.0, 10.0)), 3
+        )
 
         moves = sum(
             1
@@ -751,7 +756,9 @@ class TestFrameTrace:
         assert moves == 15
 
     def test_trace_corners_read_back_in_order(self):
-        trace = _build_frame_trace((0.0, 0.0, 10.0, 10.0), 2)
+        trace = _build_frame_trace(
+            _frame_rect_corners((0.0, 0.0, 10.0, 10.0)), 2
+        )
 
         corners = _frame_trace_corners(trace, corner_count=5)
 
@@ -762,6 +769,145 @@ class TestFrameTrace:
             (10.0, 0.0, None),
             (0.0, 0.0, None),
         ]
+
+
+def _polygon_area(points) -> float:
+    return 0.5 * abs(
+        sum(
+            x1 * y2 - x2 * y1
+            for (x1, y1), (x2, y2) in zip(points, points[1:] + points[:1])
+        )
+    )
+
+
+class TestFrameHull:
+    """The outline frame follows the convex hull of the cutting moves."""
+
+    def test_triangle_is_its_own_hull(self):
+        ops = Ops()
+        ops.move_to(0, 0, 0)
+        ops.line_to(10, 0, 0)
+        ops.line_to(5, 8, 0)
+        ops.line_to(0, 0, 0)
+        corners = _frame_hull_corners(ops)
+        assert corners[0] == corners[-1]
+        assert len(corners) == 4
+        assert _polygon_area(corners[:-1]) == pytest.approx(40.0)
+
+    def test_inner_points_are_dropped(self):
+        ops = Ops()
+        ops.move_to(0, 0, 0)
+        for x, y in [(10, 0), (10, 10), (0, 10), (0, 0)]:
+            ops.line_to(x, y, 0)
+        ops.move_to(4, 4, 0)
+        ops.line_to(6, 6, 0)
+        corners = _frame_hull_corners(ops)
+        assert sorted(set(corners)) == [(0, 0), (0, 10), (10, 0), (10, 10)]
+
+    def test_travel_moves_are_not_part_of_the_outline(self):
+        ops = Ops()
+        ops.move_to(100, 100, 0)
+        ops.move_to(0, 0, 0)
+        ops.line_to(10, 0, 0)
+        ops.line_to(5, 8, 0)
+        corners = _frame_hull_corners(ops)
+        assert max(x for x, _ in corners) == pytest.approx(10.0)
+
+    def test_arcs_are_followed(self):
+        ops = Ops()
+        ops.move_to(10, 0, 0)
+        ops.arc_to(-10, 0, -10, 0, clockwise=False)
+        ops.arc_to(10, 0, 10, 0, clockwise=False)
+        corners = _frame_hull_corners(ops)
+        assert len(corners) > 8
+        assert _polygon_area(corners[:-1]) == pytest.approx(
+            3.14159 * 100, rel=0.02
+        )
+
+    def test_curves_are_simplified_to_few_corners(self):
+        ops = Ops()
+        ops.move_to(12, 0, 0)
+        ops.arc_to(-12, 0, -12, 0, clockwise=False)
+        ops.arc_to(12, 0, 12, 0, clockwise=False)
+        corners = _frame_hull_corners(ops)
+        assert len(corners) <= 40
+        assert _polygon_area(corners[:-1]) == pytest.approx(
+            3.14159 * 144, rel=0.03
+        )
+
+    def test_the_outline_encloses_every_cut(self):
+        ops = Ops()
+        ops.move_to(12, 0, 0)
+        ops.arc_to(-12, 0, -12, 0, clockwise=False)
+        ops.arc_to(12, 0, 12, 0, clockwise=False)
+        corners = _frame_hull_corners(ops)[:-1]
+        linear = ops.copy()
+        linear.linearize_all()
+        for i in range(linear.len()):
+            x, y, _z = linear.endpoint(i)
+            for (ax, ay), (bx, by) in zip(corners, corners[1:] + corners[:1]):
+                cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax)
+                assert cross >= -1e-6
+
+    def test_degenerate_jobs_fall_back_to_the_rectangle(self):
+        ops = Ops()
+        ops.move_to(0, 0, 0)
+        ops.line_to(10, 0, 0)
+        assert _frame_hull_corners(ops) == _frame_rect_corners(ops.rect())
+
+    def test_the_trace_follows_the_hull(self):
+        ops = Ops()
+        ops.move_to(0, 0, 0)
+        ops.line_to(10, 0, 0)
+        ops.line_to(5, 8, 0)
+        outline = _frame_hull_corners(ops)
+        trace = _build_frame_trace(outline, 1)
+        corners = _frame_trace_corners(trace, corner_count=len(outline))
+        assert [(x, y) for x, y, _e in corners] == outline
+
+
+class TestFrameAction:
+    """The frame action hands the rectangle or the outline to the driver."""
+
+    @staticmethod
+    def _triangle_artifact(machine) -> JobArtifact:
+        ops = Ops()
+        ops.move_to(10, 10, 0)
+        ops.line_to(30, 10, 0)
+        ops.line_to(20, 25, 0)
+        ops.line_to(10, 10, 0)
+        encoded = machine.driver.get_encoder().encode(ops, machine, None)
+        return JobArtifact(
+            ops=ops,
+            distance=ops.distance(),
+            generation_id=1,
+            encoded_output=encoded,
+        )
+
+    async def _frame_corners(self, machine_cmd, machine, mocker, outline):
+        frame = mocker.AsyncMock()
+        mocker.patch.object(machine.driver, "frame", frame)
+        await machine_cmd._run_frame_action(
+            self._triangle_artifact(machine), machine, None, outline=outline
+        )
+        return frame.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_rectangle_by_default(self, machine_cmd, machine, mocker):
+        corners = await self._frame_corners(
+            machine_cmd, machine, mocker, outline=False
+        )
+        assert len(corners) == 5
+
+    @pytest.mark.asyncio
+    async def test_outline_follows_the_hull(
+        self, machine_cmd, machine, mocker
+    ):
+        corners = await self._frame_corners(
+            machine_cmd, machine, mocker, outline=True
+        )
+        assert len(corners) == 4
+        assert corners[0] == corners[-1]
 
 
 class TestDriverFrameDefault:
