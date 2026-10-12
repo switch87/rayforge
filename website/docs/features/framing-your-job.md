@@ -33,6 +33,17 @@ Trace the job boundary without turning on the laser:
 4. **Watch the laser head** trace the boundary rectangle
 5. **Verify positioning** and adjust material if needed
 
+### Framing the Outline
+
+The **Frame Outline** button, next to **Frame** in the toolbar and in the **Machine** menu, traces
+the outline of the design instead of its bounding rectangle: the shape a rubber band would take
+around everything that is cut. Use it on round coasters, log slices and offcuts, where the corners
+of the rectangle stick out past the material long before the design does.
+
+The outline follows the cuts only, not the travel moves. Curved parts are traced as short straight
+stretches that stay just outside the design, so the whole design is always inside the frame. The
+frame settings below apply to both buttons.
+
 ### Method 2: Low Power Preview
 
 Some machines support low-power framing with a visible beam:

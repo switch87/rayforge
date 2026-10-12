@@ -151,6 +151,15 @@ class MainToolbar(Gtk.Box):
         self.frame_button.set_action_name("win.machine-frame")
         self.append(self.frame_button)
 
+        self.frame_outline_button = Gtk.Button(
+            child=get_icon("frame-outline-symbolic")
+        )
+        self.frame_outline_button.set_tooltip_text(
+            _("Cycle laser head around the outline of the design")
+        )
+        self.frame_outline_button.set_action_name("win.machine-frame-outline")
+        self.append(self.frame_outline_button)
+
         self.send_button = Gtk.Button(child=get_icon("send-symbolic"))
         self.send_button.set_tooltip_text(_("Send to machine"))
         self.send_button.set_action_name("win.machine-send")

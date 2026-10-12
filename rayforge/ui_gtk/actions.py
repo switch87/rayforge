@@ -487,6 +487,9 @@ class ActionManager:
         # Machine Control Actions
         self._add_action("machine-home", self.win.on_home_clicked)
         self._add_action("machine-frame", self.win.on_frame_clicked)
+        self._add_action(
+            "machine-frame-outline", self.win.on_frame_outline_clicked
+        )
         self._add_action("machine-send", self.win.on_send_clicked)
         self._add_action("machine-cancel", self.win.on_cancel_clicked)
         self._add_action(

@@ -194,6 +194,7 @@ class MainMenu(Gio.Menu):
         jog_group = Gio.Menu()
         jog_group.append(_("Home"), "win.machine-home")
         jog_group.append(_("Frame"), "win.machine-frame")
+        jog_group.append(_("Frame Outline"), "win.machine-frame-outline")
         machine_menu.append_section(None, jog_group)
 
         # Macros submenu under jog controls

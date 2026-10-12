@@ -2012,6 +2012,7 @@ class MainWindow(Adw.ApplicationWindow):
             am.get_action("machine-settings").set_enabled(False)
             am.get_action("machine-home").set_enabled(False)
             am.get_action("machine-frame").set_enabled(False)
+            am.get_action("machine-frame-outline").set_enabled(False)
             am.get_action("machine-send").set_enabled(False)
             am.get_action("machine-hold").set_enabled(False)
             am.get_action("machine-cancel").set_enabled(False)
@@ -2090,13 +2091,19 @@ class MainWindow(Adw.ApplicationWindow):
                 and not is_job_or_task_active
             )
             am.get_action("machine-frame").set_enabled(can_frame)
+            am.get_action("machine-frame-outline").set_enabled(can_frame)
             if not active_machine.can_frame():
-                self.toolbar.frame_button.set_tooltip_text(
-                    _("Add a laser head to enable")
-                )
+                for button in (
+                    self.toolbar.frame_button,
+                    self.toolbar.frame_outline_button,
+                ):
+                    button.set_tooltip_text(_("Add a laser head to enable"))
             else:
                 self.toolbar.frame_button.set_tooltip_text(
                     _("Cycle laser head around the occupied area")
+                )
+                self.toolbar.frame_outline_button.set_tooltip_text(
+                    _("Cycle laser head around the outline of the design")
                 )
 
             send_sensitive = (
@@ -2522,6 +2529,13 @@ class MainWindow(Adw.ApplicationWindow):
         fut.add_done_callback(self._on_job_future_done)
 
     def on_frame_clicked(self, action, param):
+        self._start_frame(outline=False)
+
+    def on_frame_outline_clicked(self, action, param):
+        self._start_frame(outline=True)
+
+    def _start_frame(self, outline: bool):
+        """Frames the job's bounding rectangle, or its outline."""
         config = get_context().config
         if not config.machine:
             return
@@ -2534,7 +2548,9 @@ class MainWindow(Adw.ApplicationWindow):
 
         # Get the coroutine object for the framing job
         job_coro = self.machine_cmd.frame_job(
-            config.machine, on_progress=self._on_job_progress_updated
+            config.machine,
+            on_progress=self._on_job_progress_updated,
+            outline=outline,
         )
         # Run the job using the helper
         self._run_machine_job(job_coro)

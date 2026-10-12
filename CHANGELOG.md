@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operations). The first edit is Tools > Invert Image (#515)
 - Addons: the `register_image_edits` hook and image edit registry
   (plugin API 23) let addons provide their own image edits
+- Framing: Frame Outline traces the convex outline of the design
+  instead of its bounding rectangle, for round or irregular material
+  (#560)
 
 ### Changed
 
