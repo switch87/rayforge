@@ -802,3 +802,35 @@ def test_dialog_initial_laser_page(editor, laser_machine, ui_context):
     assert dialog._extra_buttons[0].get_active() is True
     assert dialog.btn_step_settings.get_active() is False
     dialog.close()
+
+
+@pytest.mark.ui
+def test_raster_page_ramp_length_shows_edge_power(
+    editor, laser_machine, ui_context
+):
+    """Ramp Length belongs to Constant Power; a ramp shows Min Power,
+    titled as the power at the edge."""
+    step_cls = step_registry.get("EngraveStep")
+    assert step_cls is not None
+    step = cast(EngraveStep, step_cls.create(ui_context))
+    page = RasterSettingsPage(editor, step)
+
+    mode_adapter = page.engrave_widget.adapter_for("depth_mode")
+    ramp_adapter = page.engrave_widget.adapter_for("ramp_length_mm")
+    assert mode_adapter is not None and ramp_adapter is not None
+    mode_adapter.set_value("POWER_MODULATION")
+    page._sync_power_context()
+    assert _row(page, "ramp_length_mm").get_visible() is False
+
+    mode_adapter.set_value("CONSTANT_POWER")
+    page._sync_power_context()
+    assert _row(page, "ramp_length_mm").get_visible() is True
+    assert page.power_widget.get_visible() is False
+
+    ramp_adapter.set_value(0.5)
+    page._sync_power_context()
+    min_row = _row(page, "min_power_level")
+    assert page.power_widget.get_visible() is True
+    assert min_row.get_visible() is True
+    assert min_row.get_title() == "Min Power (Edge)"
+    assert _row(page, "max_power_level").get_visible() is False

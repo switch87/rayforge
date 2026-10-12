@@ -220,6 +220,20 @@ This is particularly useful for:
 - 128 (50% gray threshold)
 - Adjust based on image contrast
 
+**Ramp Length:**
+
+Slopes the edges of the engraved area, for rubber stamps and relief engravings whose raised parts
+should get wider towards the bottom so they don't break off. Near the edge, power rises from **Min
+Power (Edge)** to full power over the ramp length; deeper inside, the area is engraved at full
+power. With 0 (the default) every engraved pixel gets full power, as before.
+
+- Min Power appears in the Power section as soon as the ramp length is above 0
+- The slope follows every edge of the engraved area, including the edge of the image
+- To slope the walls of raised letters, invert the image so that the background is engraved
+- Strokes narrower than twice the ramp length do not reach full power: their walls keep the same
+  slope, so thin strokes are engraved shallower instead of steeper
+- The ramp needs a laser that can change power during a scan line, such as GRBL with `M4`
+
 #### Dither Mode Settings
 
 ![Dither mode settings](/screenshots/step-settings-engrave-general-dither.webp)

@@ -22,6 +22,7 @@ from raygeo.image.grayscale import (
     compute_auto_levels,
     normalize_grayscale,
 )
+from raygeo.image.ramp import edge_ramp
 from raygeo.ops.part import Part
 from raygeo.ops.types import RasterMode
 
@@ -304,6 +305,7 @@ def preprocess_raster_image(
     dither_serpentine: bool = False,
     halftone_cell_mm: float = DEFAULT_HALFTONE_CELL_MM,
     halftone_angle: float = DEFAULT_HALFTONE_ANGLE,
+    ramp_length_mm: float = 0.0,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     """Convert a Cairo surface into an image array for a raster assembler.
 
@@ -339,6 +341,8 @@ def preprocess_raster_image(
             the error-diffusion algorithms.
         halftone_cell_mm: Dot spacing of the halftone screen in mm.
         halftone_angle: Halftone screen angle in degrees.
+        ramp_length_mm: For ``CONSTANT_POWER``, slopes the burned edges
+            over this distance (see ``ramp_power_image``); 0 is off.
 
     Returns:
         ``(image, alpha)`` where *image* is a 2-D ``uint8`` array
@@ -389,9 +393,38 @@ def preprocess_raster_image(
 
     if mode == DepthMode.CONSTANT_POWER:
         image = surface_to_binary(surface, threshold=threshold)
+        if ramp_length_mm > 0:
+            return ramp_power_image(
+                image,
+                ramp_length_mm,
+                (pixels_per_mm_x, pixels_per_mm_y or pixels_per_mm_x),
+            )
         return image, None
 
     return None, None
+
+
+def ramp_power_image(
+    binary: np.ndarray,
+    ramp_length_mm: float,
+    pixels_per_mm: tuple[float, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Turn a burn mask into a power map whose edges slope.
+
+    Every burned pixel gets a gray value for the power-modulated
+    assembler: power rises from the minimum at the edge of the burned
+    area to full power at ``ramp_length_mm`` inside it. Strokes
+    narrower than twice the ramp length stay below full power, so their
+    walls keep the same slope. Pixels that are not burned get alpha 0.
+
+    Returns:
+        ``(gray, alpha)``: ``uint8`` gray (0 = full power) and a
+        ``float32`` alpha that is 1 for burned pixels.
+    """
+    ramp = edge_ramp(binary, ramp_length_mm, pixels_per_mm)
+    gray = np.round(255.0 * (1.0 - ramp)).astype(np.uint8)
+    alpha = (binary != 0).astype(np.float32)
+    return gray, alpha
 
 
 def _apply_raster_levels(

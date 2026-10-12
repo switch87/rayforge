@@ -23,7 +23,10 @@ class RasterPowerWidget(VarSetWidget):
 
     def _update_visibility(self):
         super()._update_visibility()
-        self._update_power_labels()
+        if self._context_values.get("depth_mode") == "CONSTANT_POWER":
+            self._update_ramp_labels()
+        else:
+            self._update_power_labels()
         # Modes without power modulation or levels (constant power)
         # leave every row hidden; hide the empty section entirely.
         self.set_visible(
@@ -54,3 +57,14 @@ class RasterPowerWidget(VarSetWidget):
         if row is not None:
             row.set_title(escape_title(title))
             cast(Adw.ActionRow, row).set_subtitle(escape_title(subtitle))
+
+    def _update_ramp_labels(self):
+        """In Constant Power, Min Power is the power at the ramp edge."""
+        self._set_row_text(
+            "min_power_level",
+            _("Min Power (Edge)"),
+            _(
+                "Power at the edge of the ramp, as a percentage "
+                "of the step's main power"
+            ),
+        )

@@ -97,6 +97,12 @@ class EngraveStep(LaserStep):
                 and dither_algorithm(v) is DitherAlgorithm.HALFTONE
             )
 
+        def ramps_edges(v):
+            return is_constant(v) and (v.get("ramp_length_mm") or 0) > 0
+
+        def shows_min_power(v):
+            return is_power(v) or ramps_edges(v)
+
         def uses_grayscale(v):
             return is_power(v) or is_multi_pass(v)
 
@@ -120,6 +126,20 @@ class EngraveStep(LaserStep):
                     default=254,
                     min_val=0,
                     max_val=255,
+                    visible_when=is_constant,
+                ),
+                LengthVar(
+                    key="ramp_length_mm",
+                    label=_("Ramp Length"),
+                    description=_(
+                        "Slopes the edges for stamps and relief: power "
+                        "rises from Min Power at the edge to full power "
+                        "over this distance (0 = off)"
+                    ),
+                    default=0.0,
+                    min_val=0.0,
+                    max_val=20.0,
+                    digits=2,
                     visible_when=is_constant,
                 ),
                 LabeledChoiceVar(
@@ -285,7 +305,7 @@ class EngraveStep(LaserStep):
                     max_val=1.0,
                     show_value=True,
                     format_suffix="%",
-                    visible_when=is_power,
+                    visible_when=shows_min_power,
                 ),
                 SliderFloatVar(
                     key="max_power_level",
@@ -333,6 +353,7 @@ class EngraveStep(LaserStep):
         self.black_point = 0
         self.white_point = 255
         self.threshold = 254
+        self.ramp_length_mm = 0.0
         self.line_interval_mm = None
         self.sample_interval_mm = None
         self.dot_width_correction_mm = None
@@ -398,6 +419,16 @@ class EngraveStep(LaserStep):
         placement matrix."""
         return True
 
+    @property
+    def ramps_edges(self) -> bool:
+        """Constant Power with a ramp length runs power-modulated."""
+        return self.depth_mode == "CONSTANT_POWER" and self.ramp_length_mm > 0
+
+    def _effective_depth_mode(self) -> DepthMode:
+        if self.ramps_edges:
+            return DepthMode.POWER_MODULATION
+        return DepthMode[self.depth_mode]
+
     def get_assembler_kwargs(
         self,
         machine: Machine,
@@ -412,12 +443,12 @@ class EngraveStep(LaserStep):
             else spot_y
         )
         return {
-            "mode": DepthMode[self.depth_mode].raygeo_name,
+            "mode": self._effective_depth_mode().raygeo_name,
             "line_interval_mm": line_interval,
             "sample_interval_mm": self.sample_interval_mm,
             "dot_width_correction_mm": self.dot_width_correction_mm,
             "min_power": self.min_power_level,
-            "max_power": self.max_power_level,
+            "max_power": 1.0 if self.ramps_edges else self.max_power_level,
             "step_power": self.power,
             "num_power_levels": self.num_power_levels,
             "angle": self.scan_angle,
@@ -469,7 +500,6 @@ class EngraveStep(LaserStep):
         )
         part, alpha = _build_raster_part(self, machine, workpiece)
         kwargs = self.get_assembler_kwargs(machine, workpiece)
-        depth_mode = DepthMode[self.depth_mode]
         line_interval = kwargs["line_interval_mm"] or spot_y
         sample_interval = kwargs["sample_interval_mm"] or spot_x / 2.0
         dot_width = (
@@ -484,7 +514,7 @@ class EngraveStep(LaserStep):
             else None
         )
         spec = RasterSpec(
-            mode=depth_mode.raygeo_name,
+            mode=kwargs["mode"],
             line_interval_mm=line_interval,
             sample_interval_mm=sample_interval,
             min_power=kwargs["min_power"],
@@ -527,6 +557,7 @@ class EngraveStep(LaserStep):
                 "black_point": self.black_point,
                 "white_point": self.white_point,
                 "threshold": self.threshold,
+                "ramp_length_mm": self.ramp_length_mm,
                 "dither_algorithm": (
                     self.dither_algorithm.name
                     if self.dither_algorithm is not None
@@ -558,6 +589,7 @@ class EngraveStep(LaserStep):
         result["black_point"] = self.black_point
         result["white_point"] = self.white_point
         result["threshold"] = self.threshold
+        result["ramp_length_mm"] = self.ramp_length_mm
         result["line_interval_mm"] = self.line_interval_mm
         result["sample_interval_mm"] = self.sample_interval_mm
         result["dot_width_correction_mm"] = self.dot_width_correction_mm
@@ -609,6 +641,7 @@ class EngraveStep(LaserStep):
             "white_point", legacy.get("white_point", 255)
         )
         step.threshold = data.get("threshold", legacy.get("threshold", 254))
+        step.ramp_length_mm = data.get("ramp_length_mm", 0.0)
         step.line_interval_mm = data.get(
             "line_interval_mm", legacy.get("line_interval_mm", None)
         )
@@ -690,6 +723,7 @@ class EngraveStep(LaserStep):
                 "black_point",
                 "white_point",
                 "threshold",
+                "ramp_length_mm",
                 "line_interval_mm",
                 "sample_interval_mm",
                 "dot_width_correction_mm",
@@ -852,6 +886,7 @@ def _build_raster_part(
         dither_serpentine=step.dither_serpentine,
         halftone_cell_mm=step.halftone_cell_mm,
         halftone_angle=step.halftone_angle,
+        ramp_length_mm=step.ramp_length_mm,
     )
     surface.flush()
     if image is None:

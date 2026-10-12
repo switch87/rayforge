@@ -99,6 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its layer; generated content like the Material Test Grid restricts
   its step to the workpiece it creates, and that selection is now
   visible instead of hidden
+- Engrave: Ramp Length for Constant Power slopes the edges of the
+  engraved area for rubber stamps and relief: power rises from Min Power
+  at the edge to full power over the ramp length (#526)
 
 ### Changed
 

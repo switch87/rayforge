@@ -18,6 +18,7 @@ from .raster_power_widget import RasterPowerWidget
 _ENGRAVE_KEYS = {
     "depth_mode",
     "threshold",
+    "ramp_length_mm",
     "dither_algorithm",
     "dither_serpentine",
     "halftone_cell_mm",
@@ -83,11 +84,13 @@ class RasterSettingsPage(LaserStepSettingsPage):
         # as context; the adapter fires changed synchronously on user
         # interaction and on resync.
         self._sync_power_context()
-        adapter = self.engrave_widget.adapter_for("depth_mode")
-        if adapter is not None:
-            adapter.changed.connect(
-                lambda sender: self._sync_power_context(), weak=False
-            )
+        for key in ("depth_mode", "ramp_length_mm"):
+            adapter = self.engrave_widget.adapter_for(key)
+            if adapter is not None:
+                adapter.changed.connect(
+                    lambda sender, k=key: self._sync_power_context(),
+                    weak=False,
+                )
 
         levels = self.power_widget.adapter_for("black_point")
         if isinstance(levels, LevelsAdapter):
@@ -120,7 +123,10 @@ class RasterSettingsPage(LaserStepSettingsPage):
         """Feed the current depth_mode into the Power section."""
         values = self.engrave_widget.get_values()
         self.power_widget.set_context_values(
-            {"depth_mode": values.get("depth_mode")}
+            {
+                "depth_mode": values.get("depth_mode"),
+                "ramp_length_mm": values.get("ramp_length_mm"),
+            }
         )
 
     def _on_varset_data_changed(self, widget, key):

@@ -743,3 +743,83 @@ class TestLegacyInvert:
         assert restored_wp.image_edits == (LEGACY_INVERT,)
         again = Doc.from_dict(restored.to_dict())
         assert again.all_workpieces[0].image_edits == (LEGACY_INVERT,)
+
+
+class TestRampLength:
+    """Ramp Length slopes the edges in Constant Power mode (#526)."""
+
+    def _ramped(self, length=0.5) -> EngraveStep:
+        step = EngraveStep(name="engrave")
+        step.depth_mode = "CONSTANT_POWER"
+        step.min_power_level = 0.2
+        step.max_power_level = 0.7
+        step.ramp_length_mm = length
+        return step
+
+    def test_defaults_to_off(self):
+        assert EngraveStep().ramp_length_mm == 0.0
+
+    def test_round_trips(self):
+        step = self._ramped(0.8)
+        assert EngraveStep.from_dict(step.to_dict()).ramp_length_mm == 0.8
+
+    def test_old_files_load_with_ramp_off(self):
+        data = EngraveStep().to_dict()
+        data.pop("ramp_length_mm")
+        assert EngraveStep.from_dict(data).ramp_length_mm == 0.0
+
+    def test_is_part_of_the_cache_params(self):
+        assert self._ramped(0.8).get_cache_params()["ramp_length_mm"] == 0.8
+
+    def test_is_a_recipe_key(self):
+        keys = {var.key for var in EngraveStep.recipe_varset().vars}
+        assert "ramp_length_mm" in keys
+
+    def test_ramp_runs_power_modulated_from_min_to_full(self, machine):
+        kwargs = self._ramped().get_assembler_kwargs(machine, WorkPiece("w"))
+        assert kwargs["mode"] == "power_modulated"
+        assert kwargs["min_power"] == 0.2
+        assert kwargs["max_power"] == 1.0
+
+    def test_without_ramp_constant_power_is_unchanged(self, machine):
+        kwargs = self._ramped(0.0).get_assembler_kwargs(
+            machine, WorkPiece("w")
+        )
+        assert kwargs["mode"] == "mask_scan"
+        assert kwargs["max_power"] == 0.7
+
+    def test_ramp_only_applies_to_constant_power(self, machine):
+        step = self._ramped()
+        step.depth_mode = "DITHER"
+        kwargs = step.get_assembler_kwargs(machine, WorkPiece("w"))
+        assert kwargs["mode"] == "dither"
+
+    def test_payload_uses_the_ramped_mode(self, machine):
+        wp = WorkPiece(name="wp")
+        wp.set_size(10.0, 10.0)
+        with patch.object(WorkPiece, "render_to_pixels", return_value=None):
+            _part, payload = self._ramped().build_compute_payload(machine, wp)
+        spec = payload.assembler.spec
+        assert spec.mode == "power_modulated"
+        assert spec.min_power == 0.2
+        assert spec.max_power == 1.0
+
+    def test_ramp_length_visibility(self):
+        var = next(
+            v
+            for v in EngraveStep.recipe_varset().vars
+            if v.key == "ramp_length_mm"
+        )
+        assert var.is_visible({"depth_mode": "CONSTANT_POWER"})
+        assert not var.is_visible({"depth_mode": "DITHER"})
+
+    def test_min_power_is_shown_while_ramping(self):
+        var = next(
+            v
+            for v in EngraveStep.recipe_varset().vars
+            if v.key == "min_power_level"
+        )
+        constant = {"depth_mode": "CONSTANT_POWER"}
+        assert not var.is_visible({**constant, "ramp_length_mm": 0.0})
+        assert var.is_visible({**constant, "ramp_length_mm": 0.5})
+        assert var.is_visible({"depth_mode": "POWER_MODULATION"})

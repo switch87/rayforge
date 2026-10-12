@@ -424,6 +424,52 @@ class TestPreprocessRasterImage:
         assert np.sum(image_low) != np.sum(image_high)
 
 
+class TestRampedConstantPower:
+    """Constant Power with a ramp length slopes the burned edges."""
+
+    def _surface(self):
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 30, 30)
+        ctx = cairo.Context(surface)
+        ctx.set_source_rgba(1, 1, 1, 1)
+        ctx.paint()
+        ctx.set_source_rgba(0, 0, 0, 1)
+        ctx.rectangle(5, 5, 20, 20)
+        ctx.fill()
+        return surface
+
+    def _preprocess(self, ramp_length_mm):
+        return preprocess_raster_image(
+            self._surface(),
+            mode=DepthMode.CONSTANT_POWER,
+            threshold=128,
+            pixels_per_mm_x=10.0,
+            pixels_per_mm_y=10.0,
+            ramp_length_mm=ramp_length_mm,
+        )
+
+    def test_zero_ramp_keeps_the_binary_output(self):
+        image, alpha = self._preprocess(0.0)
+        assert alpha is None
+        assert image is not None
+        assert set(np.unique(image)) == {0, 1}
+
+    def test_ramp_returns_a_power_map_for_burned_pixels(self):
+        gray, alpha = self._preprocess(0.5)
+        assert gray is not None and alpha is not None
+        assert gray.dtype == np.uint8
+        assert np.all(alpha[:, :5] == 0)
+        assert np.all(alpha[:, 25:] == 0)
+        assert np.all(alpha[5:25, 5:25] == 1)
+
+    def test_power_rises_from_the_edge(self):
+        gray, _alpha = self._preprocess(0.5)
+        assert gray is not None
+        row = gray[15, 5:15].astype(int)
+        assert row[0] > row[2] > row[4]
+        assert row[5] == 0
+        assert np.all(np.diff(row) <= 0)
+
+
 class TestComputeRasterAutoLevels:
     """Tests for compute_raster_auto_levels()."""
 
